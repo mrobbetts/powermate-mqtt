@@ -12,11 +12,48 @@ PREFIX = os.environ.get("PM_TOPIC_PREFIX", "powermate").rstrip("/")
 LONG_PRESS_S = int(os.environ.get("PM_LONG_PRESS_MS", "600")) / 1000
 
 dev = InputDevice(DEVICE)
+
+
+def set_led(brightness=0, pulse_speed=255, pulse_table=0,
+            pulse_asleep=False, pulse_awake=False):
+    v = brightness & 0xFF
+    v |= (pulse_speed & 0x1FF) << 8
+    v |= (pulse_table & 0x3) << 17
+    v |= pulse_asleep << 19
+    v |= pulse_awake << 20
+    dev.write(ecodes.EV_MSC, ecodes.MSC_PULSELED, v)
+
+
+def on_connect(client, _userdata, _flags, _reason_code, _properties):
+    # (Re)subscribe on every (re)connect
+    client.subscribe(f"{PREFIX}/led/#")
+    client.publish(f"{PREFIX}/status", "online", retain=True)
+
+
+def on_message(_client, _userdata, msg):
+    payload = msg.payload.decode(errors="replace").strip().lower()
+    try:
+        if msg.topic == f"{PREFIX}/led/brightness":
+            # 0-255; also cancels pulsing
+            set_led(brightness=max(0, min(255, int(payload))))
+        elif msg.topic == f"{PREFIX}/led/pulse":
+            if payload in ("off", "false", "0"):
+                set_led(brightness=0)
+            else:
+                # "on"/"true" -> normal speed, or a number 0-510
+                speed = 255 if payload in ("on", "true") \
+                    else max(0, min(510, int(payload)))
+                set_led(pulse_speed=speed, pulse_awake=True)
+    except ValueError:
+        pass  # ignore malformed payloads
+
+
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+client.on_connect = on_connect
+client.on_message = on_message
 client.will_set(f"{PREFIX}/status", "offline", retain=True)
 client.connect(BROKER, PORT)
 client.loop_start()
-client.publish(f"{PREFIX}/status", "online", retain=True)
 
 pressed_at = None
 long_fired = False
