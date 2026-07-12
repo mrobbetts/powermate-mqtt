@@ -60,19 +60,24 @@ long_fired = False
 
 # The PowerMate's encoder emits 2 counts per minimum physical step, in
 # separate USB reports ~8ms apart. Accumulate rotation and flush after a
-# short quiet window so one step becomes one message.
+# short quiet window so one step becomes one message. During sustained
+# spinning the quiet window never elapses, so a max-latency cap forces
+# periodic partial flushes to keep the stream responsive.
 FLUSH_S = int(os.environ.get("PM_ROTATE_FLUSH_MS", "30")) / 1000
+MAX_LATENCY_S = int(os.environ.get("PM_ROTATE_MAX_LATENCY_MS", "80")) / 1000
 pending = {"rotate": 0, "rotate_pressed": 0}
+pending_since = None
 flush_at = None
 
 
 def flush_rotation():
-    global flush_at
+    global flush_at, pending_since
     for sub in pending:
         if pending[sub]:
             client.publish(f"{PREFIX}/{sub}", pending[sub])
             pending[sub] = 0
     flush_at = None
+    pending_since = None
 
 
 while True:
@@ -92,7 +97,10 @@ while True:
             if ev.type == ecodes.EV_REL and ev.code == ecodes.REL_DIAL:
                 sub = "rotate_pressed" if pressed_at is not None else "rotate"
                 pending[sub] += ev.value
-                flush_at = now + FLUSH_S
+                if pending_since is None:
+                    pending_since = now
+                flush_at = min(now + FLUSH_S,
+                               pending_since + MAX_LATENCY_S)
             elif ev.type == ecodes.EV_KEY and ev.code == ecodes.BTN_0:
                 flush_rotation()  # keep event ordering sane around clicks
                 if ev.value == 1:
