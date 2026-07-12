@@ -38,6 +38,16 @@ in
       description = "Hold duration before a long_press is emitted.";
     };
 
+    ticksPerStep = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 1;
+      description = ''
+        Raw encoder ticks per published rotation event. Leave at 1
+        (pass-through). Set to 2 if a marginal USB link duplicates
+        every report (one MQTT event per pair of ticks).
+      '';
+    };
+
     device = lib.mkOption {
       type = lib.types.str;
       default = "/dev/input/powermate";
@@ -63,6 +73,7 @@ in
         PM_PORT = toString cfg.brokerPort;
         PM_TOPIC_PREFIX = cfg.topicPrefix;
         PM_LONG_PRESS_MS = toString cfg.longPressMs;
+        PM_TICKS_PER_STEP = toString cfg.ticksPerStep;
       };
       serviceConfig = {
         ExecStart = lib.getExe cfg.package;

@@ -58,62 +58,37 @@ client.loop_start()
 pressed_at = None
 long_fired = False
 
-# The PowerMate's encoder emits 2 counts per minimum physical step, in
-# separate USB reports ~8ms apart. Accumulate rotation and flush after a
-# short quiet window so one step becomes one message. During sustained
-# spinning the quiet window never elapses, so a max-latency cap forces
-# periodic partial flushes to keep the stream responsive.
-FLUSH_S = int(os.environ.get("PM_ROTATE_FLUSH_MS", "30")) / 1000
-MAX_LATENCY_S = int(os.environ.get("PM_ROTATE_MAX_LATENCY_MS", "80")) / 1000
-pending = {"rotate": 0, "rotate_pressed": 0}
-pending_since = None
-flush_at = None
-
-
-def flush_rotation():
-    global flush_at, pending_since
-    for sub in pending:
-        if pending[sub]:
-            client.publish(f"{PREFIX}/{sub}", pending[sub])
-            pending[sub] = 0
-    flush_at = None
-    pending_since = None
-
+# Normally the device emits 1 tick per step (pass-through, default 1).
+# On marginal USB links (Pi undervoltage etc.) every report can arrive
+# duplicated ~8ms apart; setting PM_TICKS_PER_STEP=2 divides by counting,
+# emitting one event per 2 raw ticks, on the tick completing the step.
+TICKS_PER_STEP = int(os.environ.get("PM_TICKS_PER_STEP", "1"))
+acc = {"rotate": 0, "rotate_pressed": 0}
 
 while True:
-    deadlines = []
-    if pressed_at is not None and not long_fired:
-        deadlines.append(pressed_at + LONG_PRESS_S)
-    if flush_at is not None:
-        deadlines.append(flush_at)
     timeout = None
-    if deadlines:
-        timeout = max(0, min(deadlines) - time.monotonic())
-    r, _, _ = select.select([dev], [], [], timeout)
-    now = time.monotonic()
-
-    if r:
-        for ev in dev.read():
-            if ev.type == ecodes.EV_REL and ev.code == ecodes.REL_DIAL:
-                sub = "rotate_pressed" if pressed_at is not None else "rotate"
-                pending[sub] += ev.value
-                if pending_since is None:
-                    pending_since = now
-                flush_at = min(now + FLUSH_S,
-                               pending_since + MAX_LATENCY_S)
-            elif ev.type == ecodes.EV_KEY and ev.code == ecodes.BTN_0:
-                flush_rotation()  # keep event ordering sane around clicks
-                if ev.value == 1:
-                    pressed_at = now
-                    long_fired = False
-                elif pressed_at is not None:
-                    if not long_fired:
-                        client.publish(f"{PREFIX}/button", "click")
-                    pressed_at = None
-
     if pressed_at is not None and not long_fired:
-        if now >= pressed_at + LONG_PRESS_S:
-            client.publish(f"{PREFIX}/button", "long_press")
-            long_fired = True
-    if flush_at is not None and now >= flush_at:
-        flush_rotation()
+        timeout = max(0, pressed_at + LONG_PRESS_S - time.monotonic())
+    r, _, _ = select.select([dev], [], [], timeout)
+
+    if not r:  # held past threshold -> long press, suppress the click
+        client.publish(f"{PREFIX}/button", "long_press")
+        long_fired = True
+        continue
+
+    for ev in dev.read():
+        if ev.type == ecodes.EV_REL and ev.code == ecodes.REL_DIAL:
+            sub = "rotate_pressed" if pressed_at is not None else "rotate"
+            acc[sub] += ev.value
+            while abs(acc[sub]) >= TICKS_PER_STEP:
+                step = 1 if acc[sub] > 0 else -1
+                client.publish(f"{PREFIX}/{sub}", step)
+                acc[sub] -= TICKS_PER_STEP * step
+        elif ev.type == ecodes.EV_KEY and ev.code == ecodes.BTN_0:
+            if ev.value == 1:
+                pressed_at = time.monotonic()
+                long_fired = False
+            elif pressed_at is not None:
+                if not long_fired:
+                    client.publish(f"{PREFIX}/button", "click")
+                pressed_at = None
