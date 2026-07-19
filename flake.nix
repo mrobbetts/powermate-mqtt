@@ -25,11 +25,12 @@
       };
 
       # The module itself is pure options/config; this wrapper injects our
-      # package as the default, built against the *consumer's* platform.
+      # package as the default. Building it from the consumer's `pkgs`
+      # (rather than self.packages) means it uses the host system's
+      # nixpkgs — no second nixpkgs evaluation, no `follows` needed.
       nixosModules.powermate-mqtt = { pkgs, lib, ... }: {
         imports = [ ./module.nix ];
-        services.powermate-mqtt.package =
-          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.powermate-mqtt;
+        services.powermate-mqtt.package = lib.mkDefault (mkPackage pkgs);
       };
       nixosModules.default = self.nixosModules.powermate-mqtt;
     };

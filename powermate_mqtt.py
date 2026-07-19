@@ -52,7 +52,11 @@ client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
 client.on_connect = on_connect
 client.on_message = on_message
 client.will_set(f"{PREFIX}/status", "offline", retain=True)
-client.connect(BROKER, PORT)
+# connect_async + loop_start: the network thread owns the connection and
+# retries with backoff (re-resolving DNS each time), so an unreachable
+# or not-yet-resolvable broker at boot never crashes the service.
+client.reconnect_delay_set(min_delay=1, max_delay=30)
+client.connect_async(BROKER, PORT)
 client.loop_start()
 
 pressed_at = None
